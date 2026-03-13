@@ -23,9 +23,56 @@ Why this formulation:
 - stable + tunable post-processing without retraining
 - easy to deploy (ONNX → TensorRT)
 
-## Repo layout
-- `scripts/`  dataset preparation + QC
-- `skytracert_poc/`  python package (model + training code)
+## Quickstart (Apple Silicon)
 
-## Status
-- scaffolding
+Create venv + install deps:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install numpy torch
+```
+
+Build dataset index (JSONL):
+
+```bash
+python scripts/build_dataset_jsonl.py \
+  --in-dir /path/to/sigmf_pairs \
+  --out artifacts/dataset.jsonl
+```
+
+Build raw-IQ windows + occupancy targets:
+
+```bash
+python scripts/build_windows_npz.py \
+  --dataset-jsonl artifacts/dataset.jsonl \
+  --out artifacts/windows.npz \
+  --win-len 262144 --win-hop 262144 \
+  --freq-bins 1024
+```
+
+Train (uses MPS if available):
+
+```bash
+python scripts/train_occ.py \
+  --npz artifacts/windows.npz \
+  --out artifacts/tiny_occ.pt \
+  --epochs 15 --batch-size 32
+```
+
+Infer one capture → absolute-Hz controller bands:
+
+```bash
+python scripts/infer_occ.py \
+  --ckpt artifacts/tiny_occ.pt \
+  --meta /path/to/file.sigmf-meta \
+  --data /path/to/file.sigmf-data
+```
+
+## Repo layout
+- `scripts/`  dataset preparation + QC + training/inference
+- `skytracert_poc/`  python package (model + dataset + postprocess)
+
+## Notes
+- Training is optimized for Apple Silicon by defaulting to the MPS backend and using fp16 autocast.
