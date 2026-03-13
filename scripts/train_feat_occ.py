@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""Train a tiny raw-IQ -> frequency occupancy model (Apple Silicon friendly).
-
-Defaults are chosen for MPS (Metal):
-- uses torch MPS if available
-- uses mixed precision autocast on MPS (fp16) for speed
-
-Input: NPZ from scripts/build_windows_npz.py
-Output: a torch checkpoint (.pt) containing model + meta
-"""
 
 from __future__ import annotations
 
@@ -15,17 +6,30 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Dataset, random_split
 
 import sys
 
-# Allow running from repo root without installing as a package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from skytracert_poc.dataset import NPZWindowsDataset
-from skytracert_poc.model import TinyIQOccNet
+from skytracert_poc.model_feat import TinyFeatOccNet
+
+
+class FeatDataset(Dataset):
+    def __init__(self, npz_path: str):
+        z = np.load(npz_path, allow_pickle=True)
+        self.X = z["X_feat"].astype(np.float32)
+        self.y = z["y_occ"].astype(np.float32)
+        self.meta = json.loads(str(z["meta_json"]))
+
+    def __len__(self):
+        return int(self.X.shape[0])
+
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.X[idx]), torch.from_numpy(self.y[idx])
 
 
 def pick_device() -> torch.device:
@@ -40,17 +44,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--npz", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--epochs", type=int, default=15)
-    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--val-frac", type=float, default=0.2)
-    ap.add_argument("--seed", type=int, default=1337)
-    ap.add_argument("--width", type=int, default=32)
+    ap.add_argument("--hidden", type=int, default=256)
     args = ap.parse_args()
 
-    torch.manual_seed(args.seed)
-
-    # Small global knobs that help on Apple Silicon.
     try:
         torch.set_float32_matmul_precision("high")
     except Exception:
@@ -59,23 +59,19 @@ def main() -> int:
     device = pick_device()
     print("device:", device)
 
-    ds = NPZWindowsDataset(args.npz)
-    freq_bins = int(ds.meta.freq_bins)
+    ds = FeatDataset(args.npz)
+    F = int(ds.X.shape[1])
 
     n_val = max(1, int(len(ds) * args.val_frac))
     n_train = len(ds) - n_val
     train_ds, val_ds = random_split(ds, [n_train, n_val])
 
-    # MPS: num_workers>0 can be counterproductive; keep it 0 for now.
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    model = TinyIQOccNet(freq_bins=freq_bins, width=args.width).to(device)
+    model = TinyFeatOccNet(freq_bins=F, hidden=args.hidden).to(device)
 
-    # BCEWithLogitsLoss because model outputs logits.
-    # Handle class imbalance (occupancy can be sparse). Compute pos_weight from the stored
-    # npz target array for speed/stability.
-    pos = float(ds.y_occ.mean())
+    pos = float(ds.y.mean())
     pos = max(1e-4, min(1.0 - 1e-4, pos))
     pos_weight = torch.tensor([(1.0 - pos) / pos], device=device)
     print(f"pos_frac={pos:.6f} => pos_weight={float(pos_weight.item()):.3f}")
@@ -85,9 +81,9 @@ def main() -> int:
 
     use_amp = device.type in ("mps", "cuda")
 
-    def run_epoch(loader, train: bool):
+    def run(loader, train: bool):
         model.train(train)
-        total_loss = 0.0
+        tot = 0.0
         n = 0
         for x, y in loader:
             x = x.to(device)
@@ -99,31 +95,30 @@ def main() -> int:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()
-            total_loss += float(loss.detach().cpu()) * x.shape[0]
+            tot += float(loss.detach().cpu()) * x.shape[0]
             n += x.shape[0]
-        return total_loss / max(n, 1)
+        return tot / max(n, 1)
 
-    best_val = float("inf")
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    best = float("inf")
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     for ep in range(1, args.epochs + 1):
-        tr = run_epoch(train_loader, train=True)
-        va = run_epoch(val_loader, train=False)
-        print(f"epoch {ep:03d}  train_loss={tr:.4f}  val_loss={va:.4f}")
-
-        if va < best_val:
-            best_val = va
+        tr = run(train_loader, True)
+        va = run(val_loader, False)
+        print(f"epoch {ep:03d} train_loss={tr:.4f} val_loss={va:.4f}")
+        if va < best:
+            best = va
             ckpt = {
                 "model_state_dict": model.state_dict(),
-                "model": {"freq_bins": freq_bins, "width": args.width},
-                "meta": ds.meta.__dict__,
-                "best_val": best_val,
+                "model": {"freq_bins": F, "hidden": args.hidden},
+                "meta": ds.meta,
+                "best_val": best,
                 "epoch": ep,
             }
-            torch.save(ckpt, out_path)
+            torch.save(ckpt, out)
 
-    print("saved best ckpt ->", out_path)
+    print("saved ->", out)
     return 0
 
 
