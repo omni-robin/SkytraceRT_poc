@@ -6,6 +6,5 @@ data/
 artifacts/
 *.ipynb_checkpoints/
 
-# keep small example artifacts for PoC (explicitly allow a couple)
+# keep a small example dataset index for PoC
 !artifacts/dataset_subset20.jsonl
-!artifacts/windows_subset20.npz
