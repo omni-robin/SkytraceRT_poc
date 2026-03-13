@@ -117,8 +117,20 @@ def main() -> int:
         if abs(sr - sr_hz) > 1e-6:
             raise ValueError("Mixed sample rates not supported in this PoC")
 
-        fc_hz = float(r.get("capture", {}).get("frequency_hz"))
-        sc = r.get("capture", {}).get("sample_count")
+        # Capture info may be present in the JSONL (preferred). If not, load from meta.
+        cap = r.get("capture") or {}
+        fc = cap.get("frequency_hz")
+        sc = cap.get("sample_count")
+
+        if fc is None or sc is None:
+            meta_j = load_json(Path(r["meta_path"]))
+            cap0 = (meta_j.get("captures") or [{}])[0] or {}
+            fc = cap0.get("core:frequency") if fc is None else fc
+            sc = cap0.get("core:sample_count") if sc is None else sc
+
+        if fc is None:
+            raise ValueError(f"Missing capture frequency_hz for {r.get('id')}")
+        fc_hz = float(fc)
         sc = int(sc) if sc is not None else None
 
         data_path = Path(r["data_path"])
