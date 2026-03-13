@@ -5,3 +5,7 @@ __pycache__/
 data/
 artifacts/
 *.ipynb_checkpoints/
+
+# keep small example artifacts for PoC (explicitly allow a couple)
+!artifacts/dataset_subset20.jsonl
+!artifacts/windows_subset20.npz
