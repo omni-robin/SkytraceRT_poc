@@ -107,6 +107,8 @@ def main() -> int:
     ap.add_argument("--thr", type=float, default=0.5)
     ap.add_argument("--min-bins", type=int, default=3)
     ap.add_argument("--merge-gap-bins", type=int, default=1)
+    ap.add_argument("--smooth-radius", type=int, default=2)
+    ap.add_argument("--hysteresis", type=float, default=0.15)
     ap.add_argument("--max-bands", type=int, default=8)
     args = ap.parse_args()
 
@@ -146,6 +148,8 @@ def main() -> int:
             thr=args.thr,
             min_bins=args.min_bins,
             merge_gap_bins=args.merge_gap_bins,
+            smooth_radius=args.smooth_radius,
+            hysteresis=args.hysteresis,
         )
         pred_bands = pred_bands[: args.max_bands]
 
