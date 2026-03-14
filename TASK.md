@@ -102,6 +102,9 @@ A sweep tool exists:
 - `pred_n` tends to be < GT count because occupancy regions merge.
 - Done (first pass): added an optional peak/valley splitting heuristic in `skytracert_poc/postprocess.py` (`split=True`).
 - Next: tune the splitting hyperparams on subset20/subset100 and add a metric sweep that includes split settings.
+  - Initial report script: `scripts/report_split_effect.py`
+  - On subset20 with loose params (peak_height~0.55, sep~24, valley_drop~0.03): improved pred band count in ~11/20 multi-GT captures.
+  - On subset100 using subset100 checkpoint, splitting triggers much less; needs separate tuning (try peak_height~0.50, sep~16, valley_drop~0.01).
 
 ### C) Thresholding strategy
 - Add automatic per-capture threshold selection or val-tuned global threshold.
