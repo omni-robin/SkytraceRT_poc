@@ -6,7 +6,8 @@ Objective: configurable.
 
 Modes:
 - `iou` (default): maximize mean best-match IoU subject to mean GT coverage >= cov_min.
-- `tight`: minimize mean (best-match overshoot ratio) subject to mean GT coverage >= cov_min.
+- `tight`: minimize mean edge error (Hz) subject to mean GT coverage >= cov_min.
+  (Tie-breakers: higher IoU, higher coverage.)
 
 This runs fully in-process (no subprocess spam) and reuses the loaded model.
 """
@@ -25,7 +26,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from skytracert_poc.metrics import Band2, band_iou_1d, band_recall_coverage, best_match_overshoot_ratio
+from skytracert_poc.metrics import (
+    Band2,
+    band_iou_1d,
+    band_recall_coverage,
+    best_match_edge_error_hz,
+    best_match_overshoot_ratio,
+)
 from skytracert_poc.model_feat import TinyFeatOccNet
 from skytracert_poc.postprocess import occ_to_bands
 
@@ -119,6 +126,7 @@ def score_params(
     coverages: list[float] = []
     ious: list[float] = []
     overs: list[float] = []
+    edge_errs: list[float] = []
     pred_ns: list[int] = []
 
     for meta_path in metas:
@@ -158,18 +166,22 @@ def score_params(
 
         best_ious = []
         best_overs = []
+        best_edge_errs = []
         for g in gt_bands:
             best_ious.append(max((band_iou_1d(g, p) for p in pred_simple), default=0.0))
             best_overs.append(best_match_overshoot_ratio(g, pred_simple))
+            best_edge_errs.append(best_match_edge_error_hz(g, pred_simple))
 
         coverages.append(band_recall_coverage(gt_bands, pred_simple))
         ious.append(float(np.mean(best_ious)) if best_ious else 1.0)
         overs.append(float(np.mean(best_overs)) if best_overs else 0.0)
+        edge_errs.append(float(np.mean(best_edge_errs)) if best_edge_errs else 0.0)
         pred_ns.append(len(pred_simple))
 
     cov = float(np.mean(coverages)) if coverages else 0.0
     iou = float(np.mean(ious)) if ious else 0.0
     over = float(np.mean(overs)) if overs else 0.0
+    edge_err = float(np.mean(edge_errs)) if edge_errs else 0.0
     pred_n = float(np.mean(pred_ns)) if pred_ns else 0.0
 
     return {
@@ -179,6 +191,7 @@ def score_params(
         "mean_gt_coverage": cov,
         "mean_best_match_iou": iou,
         "mean_best_match_overshoot": over,
+        "mean_best_match_edge_error_hz": edge_err,
         "mean_pred_n": pred_n,
         "ok": cov >= cov_min,
     }
@@ -242,17 +255,21 @@ def main() -> int:
                         if best is None or key > best_key:
                             best = r
                     else:  # tight
-                        # Minimize overshoot, then maximize IoU as tie-break.
-                        key = (r["mean_best_match_overshoot"], -r["mean_best_match_iou"], -r["mean_gt_coverage"])
+                        # Minimize edge error, then maximize IoU/coverage as tie-break.
+                        key = (
+                            r["mean_best_match_edge_error_hz"],
+                            -r["mean_best_match_iou"],
+                            -r["mean_gt_coverage"],
+                        )
                         best_key = (
-                            best["mean_best_match_overshoot"],
+                            best["mean_best_match_edge_error_hz"],
                             -best["mean_best_match_iou"],
                             -best["mean_gt_coverage"],
                         ) if best else None
                         if best is None or key < best_key:
                             best = r
                 print(
-                    f"thr={thr:.2f} hys={hys:.2f} sm={sm} cov={r['mean_gt_coverage']:.4f} iou={r['mean_best_match_iou']:.4f} over={r['mean_best_match_overshoot']:.4f}",
+                    f"thr={thr:.2f} hys={hys:.2f} sm={sm} cov={r['mean_gt_coverage']:.4f} iou={r['mean_best_match_iou']:.4f} edge={r['mean_best_match_edge_error_hz']:.1f}Hz over={r['mean_best_match_overshoot']:.4f}",
                     flush=True,
                 )
 

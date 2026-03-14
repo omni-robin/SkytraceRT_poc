@@ -93,10 +93,10 @@ A sweep tool exists:
 ## Known issues / next work (tomorrow)
 
 ### A) “Tight edges” objective needs a better metric
-- Current overshoot metric (`mean_best_match_overshoot`) is not useful because predicted bands can cover multiple GT bands.
-- Replace with a direct edge error metric:
-  - for each GT band: choose best IoU pred; compute `|dlower| + |dupper|` in Hz.
-  - sweep to minimize this subject to `coverage >= target`.
+- Done: added a direct edge error metric:
+  - for each GT band: choose best-IoU prediction; compute `|dlower| + |dupper|` in Hz.
+  - exposed as `mean_best_match_edge_error_hz` in `scripts/sweep_postprocess.py`.
+- Next: run the sweep in `--mode tight` and sanity-check outputs vs a few hand-inspected captures.
 
 ### B) Reduce merged/wide bands
 - `pred_n` tends to be < GT count because occupancy regions merge.

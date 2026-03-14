@@ -55,3 +55,20 @@ def best_match_overshoot_ratio(gt_band: Band2, pred_bands: list[Band2]) -> float
 
     best = max(pred_bands, key=lambda p: band_iou_1d(gt_band, p))
     return max(0.0, best.bw_hz - gt_band.bw_hz) / gt_band.bw_hz
+
+
+def best_match_edge_error_hz(gt_band: Band2, pred_bands: list[Band2]) -> float:
+    """Absolute edge error (Hz) for the best-matching predicted band.
+
+    We pick the prediction with maximum IoU to the GT band, then compute:
+      |pred.lower - gt.lower| + |pred.upper - gt.upper|
+
+    If no predictions exist, returns the GT bandwidth (a rough, non-zero penalty).
+    """
+    if gt_band.bw_hz <= 0:
+        return 0.0
+    if not pred_bands:
+        return gt_band.bw_hz
+
+    best = max(pred_bands, key=lambda p: band_iou_1d(gt_band, p))
+    return abs(best.lower_hz - gt_band.lower_hz) + abs(best.upper_hz - gt_band.upper_hz)
