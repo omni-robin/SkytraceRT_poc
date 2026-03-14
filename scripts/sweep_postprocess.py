@@ -2,7 +2,11 @@
 """Sweep post-processing hyperparams to optimize band edges.
 
 Goal (as requested): *tight* band edges.
-Objective: maximize mean best-match IoU subject to mean GT coverage >= cov_min.
+Objective: configurable.
+
+Modes:
+- `iou` (default): maximize mean best-match IoU subject to mean GT coverage >= cov_min.
+- `tight`: minimize mean (best-match overshoot ratio) subject to mean GT coverage >= cov_min.
 
 This runs fully in-process (no subprocess spam) and reuses the loaded model.
 """
@@ -21,7 +25,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from skytracert_poc.metrics import Band2, band_iou_1d, band_recall_coverage
+from skytracert_poc.metrics import Band2, band_iou_1d, band_recall_coverage, best_match_overshoot_ratio
 from skytracert_poc.model_feat import TinyFeatOccNet
 from skytracert_poc.postprocess import occ_to_bands
 
@@ -112,9 +116,10 @@ def score_params(
     max_bands: int,
     cov_min: float,
 ) -> dict:
-    coverages = []
-    ious = []
-    pred_ns = []
+    coverages: list[float] = []
+    ious: list[float] = []
+    overs: list[float] = []
+    pred_ns: list[int] = []
 
     for meta_path in metas:
         stem = meta_path.name.removesuffix(".sigmf-meta")
@@ -152,15 +157,19 @@ def score_params(
         pred_simple = [Band2(lower_hz=b.lower_hz, upper_hz=b.upper_hz) for b in pred_bands]
 
         best_ious = []
+        best_overs = []
         for g in gt_bands:
             best_ious.append(max((band_iou_1d(g, p) for p in pred_simple), default=0.0))
+            best_overs.append(best_match_overshoot_ratio(g, pred_simple))
 
         coverages.append(band_recall_coverage(gt_bands, pred_simple))
         ious.append(float(np.mean(best_ious)) if best_ious else 1.0)
+        overs.append(float(np.mean(best_overs)) if best_overs else 0.0)
         pred_ns.append(len(pred_simple))
 
     cov = float(np.mean(coverages)) if coverages else 0.0
     iou = float(np.mean(ious)) if ious else 0.0
+    over = float(np.mean(overs)) if overs else 0.0
     pred_n = float(np.mean(pred_ns)) if pred_ns else 0.0
 
     return {
@@ -169,6 +178,7 @@ def score_params(
         "smooth_radius": smooth_radius,
         "mean_gt_coverage": cov,
         "mean_best_match_iou": iou,
+        "mean_best_match_overshoot": over,
         "mean_pred_n": pred_n,
         "ok": cov >= cov_min,
     }
@@ -180,6 +190,7 @@ def main() -> int:
     ap.add_argument("--in-dir", required=True)
     ap.add_argument("--out", default="artifacts/sweep_postprocess.json")
     ap.add_argument("--cov-min", type=float, default=0.98)
+    ap.add_argument("--mode", choices=["iou", "tight"], default="iou")
     ap.add_argument("--win-len", type=int, default=262_144)
     ap.add_argument("--win-hop", type=int, default=262_144)
     ap.add_argument("--nfft", type=int, default=2048)
@@ -199,8 +210,8 @@ def main() -> int:
 
     metas = sorted(Path(args.in_dir).glob("*.sigmf-meta"))
 
-    thr_vals = [0.50, 0.53, 0.55, 0.57, 0.60, 0.62, 0.65]
-    hyst_vals = [0.0, 0.02, 0.05, 0.08, 0.10]
+    thr_vals = [0.50, 0.55, 0.60, 0.65]
+    hyst_vals = [0.0, 0.05, 0.10]
     smooth_vals = [0, 1, 2]
 
     results = []
@@ -225,11 +236,24 @@ def main() -> int:
                 )
                 results.append(r)
                 if r["ok"]:
-                    key = (r["mean_best_match_iou"], r["mean_gt_coverage"])
-                    if best is None or key > (best["mean_best_match_iou"], best["mean_gt_coverage"]):
-                        best = r
+                    if args.mode == "iou":
+                        key = (r["mean_best_match_iou"], r["mean_gt_coverage"])
+                        best_key = (best["mean_best_match_iou"], best["mean_gt_coverage"]) if best else None
+                        if best is None or key > best_key:
+                            best = r
+                    else:  # tight
+                        # Minimize overshoot, then maximize IoU as tie-break.
+                        key = (r["mean_best_match_overshoot"], -r["mean_best_match_iou"], -r["mean_gt_coverage"])
+                        best_key = (
+                            best["mean_best_match_overshoot"],
+                            -best["mean_best_match_iou"],
+                            -best["mean_gt_coverage"],
+                        ) if best else None
+                        if best is None or key < best_key:
+                            best = r
                 print(
-                    f"thr={thr:.2f} hys={hys:.2f} sm={sm} cov={r['mean_gt_coverage']:.4f} iou={r['mean_best_match_iou']:.4f}"
+                    f"thr={thr:.2f} hys={hys:.2f} sm={sm} cov={r['mean_gt_coverage']:.4f} iou={r['mean_best_match_iou']:.4f} over={r['mean_best_match_overshoot']:.4f}",
+                    flush=True,
                 )
 
     out = Path(args.out)
