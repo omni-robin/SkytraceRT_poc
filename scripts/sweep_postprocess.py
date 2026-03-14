@@ -226,6 +226,22 @@ def main() -> int:
     ap.add_argument("--split-min-peak-height", type=float, default=None)
     ap.add_argument("--split-min-peak-sep-bins", type=int, default=24)
     ap.add_argument("--split-min-valley-drop", type=float, default=0.12)
+    ap.add_argument(
+        "--split-peak-heights",
+        default=None,
+        help="comma-separated grid for split_min_peak_height (e.g. 0.50,0.55,0.60). Defaults to just --split-min-peak-height.",
+    )
+    ap.add_argument(
+        "--split-peak-seps",
+        default=None,
+        help="comma-separated grid for split_min_peak_sep_bins (e.g. 12,16,24,32). Defaults to just --split-min-peak-sep-bins.",
+    )
+    ap.add_argument(
+        "--split-valley-drops",
+        default=None,
+        help="comma-separated grid for split_min_valley_drop (e.g. 0.01,0.02,0.03). Defaults to just --split-min-valley-drop.",
+    )
+    ap.add_argument("--limit", type=int, default=0, help="if >0, only score the first N captures")
     args = ap.parse_args()
 
     device = pick_device()
@@ -239,10 +255,38 @@ def main() -> int:
     model.load_state_dict(ckpt["model_state_dict"], strict=True)
 
     metas = sorted(Path(args.in_dir).glob("*.sigmf-meta"))
+    if args.limit and args.limit > 0:
+        metas = metas[: int(args.limit)]
 
     thr_vals = [0.50, 0.55, 0.60, 0.65]
     hyst_vals = [0.0, 0.05, 0.10]
     smooth_vals = [0, 1, 2]
+
+    def _parse_csv_floats(s: str | None) -> list[float] | None:
+        if not s:
+            return None
+        return [float(x.strip()) for x in s.split(",") if x.strip()]
+
+    def _parse_csv_ints(s: str | None) -> list[int] | None:
+        if not s:
+            return None
+        return [int(x.strip()) for x in s.split(",") if x.strip()]
+
+    peak_heights = _parse_csv_floats(args.split_peak_heights) if args.split else None
+    peak_seps = _parse_csv_ints(args.split_peak_seps) if args.split else None
+    valley_drops = _parse_csv_floats(args.split_valley_drops) if args.split else None
+
+    if args.split:
+        if peak_heights is None:
+            peak_heights = [args.split_min_peak_height]
+        if peak_seps is None:
+            peak_seps = [int(args.split_min_peak_sep_bins)]
+        if valley_drops is None:
+            valley_drops = [float(args.split_min_valley_drop)]
+    else:
+        peak_heights = [None]
+        peak_seps = [int(args.split_min_peak_sep_bins)]
+        valley_drops = [float(args.split_min_valley_drop)]
 
     results = []
     best = None
@@ -250,49 +294,55 @@ def main() -> int:
     for thr in thr_vals:
         for hys in hyst_vals:
             for sm in smooth_vals:
-                r = score_params(
-                    metas,
-                    model,
-                    device,
-                    thr=thr,
-                    hysteresis=hys,
-                    smooth_radius=sm,
-                    nfft=args.nfft,
-                    fft_hop=args.fft_hop,
-                    win_len=args.win_len,
-                    win_hop=args.win_hop,
-                    max_bands=args.max_bands,
-                    cov_min=args.cov_min,
-                    split=bool(args.split),
-                    split_min_peak_height=args.split_min_peak_height,
-                    split_min_peak_sep_bins=int(args.split_min_peak_sep_bins),
-                    split_min_valley_drop=float(args.split_min_valley_drop),
-                )
-                results.append(r)
-                if r["ok"]:
-                    if args.mode == "iou":
-                        key = (r["mean_best_match_iou"], r["mean_gt_coverage"])
-                        best_key = (best["mean_best_match_iou"], best["mean_gt_coverage"]) if best else None
-                        if best is None or key > best_key:
-                            best = r
-                    else:  # tight
-                        # Minimize edge error, then maximize IoU/coverage as tie-break.
-                        key = (
-                            r["mean_best_match_edge_error_hz"],
-                            -r["mean_best_match_iou"],
-                            -r["mean_gt_coverage"],
-                        )
-                        best_key = (
-                            best["mean_best_match_edge_error_hz"],
-                            -best["mean_best_match_iou"],
-                            -best["mean_gt_coverage"],
-                        ) if best else None
-                        if best is None or key < best_key:
-                            best = r
-                print(
-                    f"thr={thr:.2f} hys={hys:.2f} sm={sm} cov={r['mean_gt_coverage']:.4f} iou={r['mean_best_match_iou']:.4f} edge={r['mean_best_match_edge_error_hz']:.1f}Hz over={r['mean_best_match_overshoot']:.4f}",
-                    flush=True,
-                )
+                for ph in peak_heights:
+                    for ps in peak_seps:
+                        for vd in valley_drops:
+                            r = score_params(
+                                metas,
+                                model,
+                                device,
+                                thr=thr,
+                                hysteresis=hys,
+                                smooth_radius=sm,
+                                nfft=args.nfft,
+                                fft_hop=args.fft_hop,
+                                win_len=args.win_len,
+                                win_hop=args.win_hop,
+                                max_bands=args.max_bands,
+                                cov_min=args.cov_min,
+                                split=bool(args.split),
+                                split_min_peak_height=ph,
+                                split_min_peak_sep_bins=int(ps),
+                                split_min_valley_drop=float(vd),
+                            )
+                            results.append(r)
+                            if r["ok"]:
+                                if args.mode == "iou":
+                                    key = (r["mean_best_match_iou"], r["mean_gt_coverage"])
+                                    best_key = (
+                                        best["mean_best_match_iou"],
+                                        best["mean_gt_coverage"],
+                                    ) if best else None
+                                    if best is None or key > best_key:
+                                        best = r
+                                else:  # tight
+                                    # Minimize edge error, then maximize IoU/coverage as tie-break.
+                                    key = (
+                                        r["mean_best_match_edge_error_hz"],
+                                        -r["mean_best_match_iou"],
+                                        -r["mean_gt_coverage"],
+                                    )
+                                    best_key = (
+                                        best["mean_best_match_edge_error_hz"],
+                                        -best["mean_best_match_iou"],
+                                        -best["mean_gt_coverage"],
+                                    ) if best else None
+                                    if best is None or key < best_key:
+                                        best = r
+                            print(
+                                f"thr={thr:.2f} hys={hys:.2f} sm={sm} split={int(bool(args.split))} ph={ph} ps={ps} vd={vd} cov={r['mean_gt_coverage']:.4f} iou={r['mean_best_match_iou']:.4f} edge={r['mean_best_match_edge_error_hz']:.1f}Hz pred_n={r['mean_pred_n']:.2f}",
+                                flush=True,
+                            )
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
