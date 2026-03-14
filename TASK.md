@@ -100,7 +100,8 @@ A sweep tool exists:
 
 ### B) Reduce merged/wide bands
 - `pred_n` tends to be < GT count because occupancy regions merge.
-- Once edges are good, add optional splitting / peak-based segmentation.
+- Done (first pass): added an optional peak/valley splitting heuristic in `skytracert_poc/postprocess.py` (`split=True`).
+- Next: tune the splitting hyperparams on subset20/subset100 and add a metric sweep that includes split settings.
 
 ### C) Thresholding strategy
 - Add automatic per-capture threshold selection or val-tuned global threshold.

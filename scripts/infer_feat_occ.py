@@ -78,6 +78,10 @@ def main() -> int:
     ap.add_argument("--merge-gap-bins", type=int, default=1)
     ap.add_argument("--smooth-radius", type=int, default=2)
     ap.add_argument("--hysteresis", type=float, default=0.15)
+    ap.add_argument("--split", action="store_true", help="split merged bands using a peak/valley heuristic")
+    ap.add_argument("--split-min-peak-height", type=float, default=None)
+    ap.add_argument("--split-min-peak-sep-bins", type=int, default=24)
+    ap.add_argument("--split-min-valley-drop", type=float, default=0.12)
     ap.add_argument("--max-bands", type=int, default=8)
     args = ap.parse_args()
 
@@ -126,6 +130,10 @@ def main() -> int:
         merge_gap_bins=args.merge_gap_bins,
         smooth_radius=args.smooth_radius,
         hysteresis=args.hysteresis,
+        split=bool(args.split),
+        split_min_peak_height=args.split_min_peak_height,
+        split_min_peak_sep_bins=int(args.split_min_peak_sep_bins),
+        split_min_valley_drop=float(args.split_min_valley_drop),
     )
     bands = bands[: args.max_bands]
 

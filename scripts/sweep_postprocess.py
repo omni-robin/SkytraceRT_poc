@@ -122,6 +122,11 @@ def score_params(
     win_hop: int,
     max_bands: int,
     cov_min: float,
+    *,
+    split: bool,
+    split_min_peak_height: float | None,
+    split_min_peak_sep_bins: int,
+    split_min_valley_drop: float,
 ) -> dict:
     coverages: list[float] = []
     ious: list[float] = []
@@ -155,6 +160,10 @@ def score_params(
             merge_gap_bins=0,
             smooth_radius=smooth_radius,
             hysteresis=hysteresis,
+            split=split,
+            split_min_peak_height=split_min_peak_height,
+            split_min_peak_sep_bins=split_min_peak_sep_bins,
+            split_min_valley_drop=split_min_valley_drop,
         )
         pred_bands = pred_bands[:max_bands]
 
@@ -188,6 +197,10 @@ def score_params(
         "thr": thr,
         "hysteresis": hysteresis,
         "smooth_radius": smooth_radius,
+        "split": bool(split),
+        "split_min_peak_height": split_min_peak_height,
+        "split_min_peak_sep_bins": int(split_min_peak_sep_bins),
+        "split_min_valley_drop": float(split_min_valley_drop),
         "mean_gt_coverage": cov,
         "mean_best_match_iou": iou,
         "mean_best_match_overshoot": over,
@@ -209,6 +222,10 @@ def main() -> int:
     ap.add_argument("--nfft", type=int, default=2048)
     ap.add_argument("--fft-hop", type=int, default=1024)
     ap.add_argument("--max-bands", type=int, default=8)
+    ap.add_argument("--split", action="store_true", help="enable peak/valley splitting inside wide regions")
+    ap.add_argument("--split-min-peak-height", type=float, default=None)
+    ap.add_argument("--split-min-peak-sep-bins", type=int, default=24)
+    ap.add_argument("--split-min-valley-drop", type=float, default=0.12)
     args = ap.parse_args()
 
     device = pick_device()
@@ -246,6 +263,10 @@ def main() -> int:
                     win_hop=args.win_hop,
                     max_bands=args.max_bands,
                     cov_min=args.cov_min,
+                    split=bool(args.split),
+                    split_min_peak_height=args.split_min_peak_height,
+                    split_min_peak_sep_bins=int(args.split_min_peak_sep_bins),
+                    split_min_valley_drop=float(args.split_min_valley_drop),
                 )
                 results.append(r)
                 if r["ok"]:

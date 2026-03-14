@@ -68,6 +68,78 @@ def _refine_edge(
     raise ValueError("side must be left|right")
 
 
+def _pick_peaks_1d(x: np.ndarray, *, min_height: float, min_sep_bins: int) -> list[int]:
+    """Very small peak picker for 1D arrays.
+
+    Returns peak indices i where x[i] is a local maximum and x[i] >= min_height.
+    Applies a simple non-maximum suppression with min_sep_bins.
+    """
+    n = int(x.shape[0])
+    if n < 3:
+        return []
+
+    cand: list[int] = []
+    for i in range(1, n - 1):
+        if x[i] >= min_height and x[i] >= x[i - 1] and x[i] >= x[i + 1]:
+            cand.append(i)
+
+    # NMS by height
+    cand.sort(key=lambda i: float(x[i]), reverse=True)
+    picked: list[int] = []
+    for i in cand:
+        if all(abs(i - j) >= min_sep_bins for j in picked):
+            picked.append(i)
+    picked.sort()
+    return picked
+
+
+def _split_segment_on_valleys(
+    occ: np.ndarray,
+    lo: int,
+    hi: int,
+    *,
+    min_peak_height: float,
+    min_peak_sep_bins: int,
+    min_valley_drop: float,
+) -> list[tuple[int, int]]:
+    """Split a [lo,hi) segment if it contains multiple strong peaks separated by valleys."""
+    seg = occ[lo:hi]
+    peaks = _pick_peaks_1d(seg, min_height=min_peak_height, min_sep_bins=min_peak_sep_bins)
+    if len(peaks) <= 1:
+        return [(lo, hi)]
+
+    # Convert to absolute indices
+    peaks = [lo + p for p in peaks]
+
+    cuts: list[int] = []
+    for p0, p1 in zip(peaks[:-1], peaks[1:]):
+        if p1 - p0 < 2:
+            continue
+        valley_rel = int(np.argmin(occ[p0:p1 + 1]))
+        v = p0 + valley_rel
+        drop = min(float(occ[p0]), float(occ[p1])) - float(occ[v])
+        if drop >= min_valley_drop:
+            cuts.append(v)
+
+    if not cuts:
+        return [(lo, hi)]
+
+    # Build subsegments: cut at valley positions.
+    segs: list[tuple[int, int]] = []
+    start = lo
+    for v in cuts:
+        end = max(start, v)  # valley bin belongs to left side; right starts at v+1
+        if end > start:
+            segs.append((start, end))
+        start = min(hi, v + 1)
+    if start < hi:
+        segs.append((start, hi))
+
+    # Merge degenerate empties if any
+    segs = [(a, b) for a, b in segs if b > a]
+    return segs if segs else [(lo, hi)]
+
+
 def occ_to_bands(
     occ_prob: np.ndarray,
     freq_edges_abs_hz: np.ndarray,
@@ -76,6 +148,11 @@ def occ_to_bands(
     merge_gap_bins: int = 1,
     smooth_radius: int = 2,
     hysteresis: float = 0.15,
+    *,
+    split: bool = False,
+    split_min_peak_height: float | None = None,
+    split_min_peak_sep_bins: int = 24,
+    split_min_valley_drop: float = 0.12,
 ) -> list[Band]:
     """Convert occupancy probabilities into frequency bands.
 
@@ -83,9 +160,15 @@ def occ_to_bands(
     - optional smoothing (stabilizes edges)
     - hysteresis (reduces flicker / spurs): grow regions down to thr_low
     - linear interpolation at crossings for sub-bin edge refinement
+    - optional peak/valley based splitting inside a wide region (reduces merged bands)
 
     - occ_prob: shape [F]
     - freq_edges_abs_hz: shape [F+1] (absolute Hz)
+
+    Splitting heuristic notes:
+    - We look for multiple local maxima above `split_min_peak_height` (default: thr_high)
+    - If adjacent peaks have a valley between them that drops by >= `split_min_valley_drop`,
+      we split at that valley.
     """
     assert occ_prob.ndim == 1
     F = occ_prob.shape[0]
@@ -137,15 +220,37 @@ def occ_to_bands(
 
     out: list[Band] = []
     for lo, hi in merged:
-        # refine edges around thr_low crossing
-        lower = _refine_edge(occ, freq_edges_abs_hz, lo, thr_low, side="left")
-        upper = _refine_edge(occ, freq_edges_abs_hz, hi - 1, thr_low, side="right")
-        if upper <= lower:
-            continue
+        sub_segs = [(lo, hi)]
+        if split:
+            mph = float(thr_high if split_min_peak_height is None else split_min_peak_height)
+            sub_segs = _split_segment_on_valleys(
+                occ,
+                lo,
+                hi,
+                min_peak_height=mph,
+                min_peak_sep_bins=int(split_min_peak_sep_bins),
+                min_valley_drop=float(split_min_valley_drop),
+            )
 
-        center = 0.5 * (lower + upper)
-        score = float(occ[lo:hi].mean())
-        out.append(Band(lower_hz=float(lower), upper_hz=float(upper), center_hz=float(center), score=score))
+        for slo, shi in sub_segs:
+            if (shi - slo) < min_bins:
+                continue
+            # refine edges around thr_low crossing
+            lower = _refine_edge(occ, freq_edges_abs_hz, slo, thr_low, side="left")
+            upper = _refine_edge(occ, freq_edges_abs_hz, shi - 1, thr_low, side="right")
+            if upper <= lower:
+                continue
+
+            center = 0.5 * (lower + upper)
+            score = float(occ[slo:shi].mean())
+            out.append(
+                Band(
+                    lower_hz=float(lower),
+                    upper_hz=float(upper),
+                    center_hz=float(center),
+                    score=score,
+                )
+            )
 
     out.sort(key=lambda b: b.score, reverse=True)
     return out
