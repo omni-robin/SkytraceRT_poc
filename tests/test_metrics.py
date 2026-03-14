@@ -36,9 +36,15 @@ class TestMetrics(unittest.TestCase):
     def test_best_match_edge_error_selects_best_iou(self):
         gt = Band2(100.0, 200.0)
         # First pred has worse IoU but smaller edge error; second has better IoU.
-        p1 = Band2(80.0, 190.0)   # smaller edge error (|80-100|+|190-200|=30)
-        p2 = Band2(95.0, 205.0)   # better IoU and edge error 5+5=10
+        p1 = Band2(80.0, 190.0)   # edge error 30
+        p2 = Band2(95.0, 205.0)   # edge error 10
         self.assertAlmostEqual(best_match_edge_error_hz(gt, [p1, p2]), 10.0)
+
+    def test_best_match_edge_error_no_overlap_is_capped(self):
+        gt = Band2(100.0, 200.0)
+        pred = [Band2(300.0, 400.0)]
+        # No overlap => return gt_bw (cap)
+        self.assertAlmostEqual(best_match_edge_error_hz(gt, pred), 100.0)
 
 
 if __name__ == "__main__":

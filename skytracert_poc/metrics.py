@@ -71,4 +71,8 @@ def best_match_edge_error_hz(gt_band: Band2, pred_bands: list[Band2]) -> float:
         return gt_band.bw_hz
 
     best = max(pred_bands, key=lambda p: band_iou_1d(gt_band, p))
+    best_iou = band_iou_1d(gt_band, best)
+    if best_iou <= 0.0:
+        # No overlap at all: treat as a miss, but don't let the metric explode.
+        return gt_band.bw_hz
     return abs(best.lower_hz - gt_band.lower_hz) + abs(best.upper_hz - gt_band.upper_hz)
